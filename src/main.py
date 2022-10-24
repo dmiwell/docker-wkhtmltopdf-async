@@ -94,4 +94,4 @@ app.add_routes(routes)
 
 
 if __name__ == '__main__':
-  web.run_app(app, keepalive_timeout=300)
+  web.run_app(app, keepalive_timeout=300, port=80)

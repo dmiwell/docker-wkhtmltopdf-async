@@ -27,7 +27,7 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
     log_record['timestamp'] = datetime.utcnow()
 
   for key in ('name',):
-    if value := getattr(record, key, None) and value != 'root':
+    if (value := getattr(record, key, None)) and value != 'root':
       log_record[key] = value
 
 
