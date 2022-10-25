@@ -51,7 +51,8 @@ class PdfHanlder(web.View):
   def _total_time(self) -> float:
     return time.perf_counter() - self.start_time
 
-  def _log(self, message: str, extra: dict[str, object] = dict(), method: Literal['info', 'warn', 'error', 'debug'] = 'info') -> None:
+  def _log(self, message: str, extra: dict[str, object] = dict(),
+           method: Literal['info', 'warn', 'error', 'debug'] = 'info') -> None:
     getattr(app_logger, method)(message, extra=dict(**self._log_extra, **extra))
 
   @cached_property
@@ -59,12 +60,15 @@ class PdfHanlder(web.View):
     return dict(trace_id=self.request.headers.get('X-Trace-Id', str(uuid4())))
 
   def _count_and_log(self, kind: State) -> None:
-    extra: dict[str, object] = dict(tasks_in_process=self.count)
+    extra: dict[str, object] = dict()
+
     if kind == State.start:
       PdfHanlder.count += 1
     else:
       extra['elapsed'] = self._total_time
       PdfHanlder.count -= 1
+
+    extra['tasks_in_process'] = PdfHanlder.count
 
     self._log(f'{kind.value} converting html to pdf', extra)
 
@@ -80,7 +84,11 @@ class PdfHanlder(web.View):
         response.content_type = 'application/pdf'
         await response.prepare(self.request)
 
-        pages_count = await self._wkhtmltopdf_exec(sourcefile.name, targetfile.name, options=dict(**json.get('options', {})))
+        pages_count = await self._wkhtmltopdf_exec(
+          sourcefile.name,
+          targetfile.name,
+          options=json.get('options', {})
+        )
         self._log(f'{pages_count} pages has been written', method='debug')
 
         size = 0
