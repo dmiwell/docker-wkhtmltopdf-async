@@ -1,7 +1,10 @@
+import asyncio
+from functools import cached_property
 import os
 import sys
-from typing import Any
-import pdfkit
+from typing import Literal
+from uuid import uuid4
+import re
 import os
 import tempfile
 from aiohttp import web
@@ -48,22 +51,22 @@ class PdfHanlder(web.View):
   def _total_time(self) -> float:
     return time.perf_counter() - self.start_time
 
-  @property
+  def _log(self, message: str, extra: dict[str, object] = dict(), method: Literal['info', 'warn', 'error', 'debug'] = 'info') -> None:
+    getattr(app_logger, method)(message, extra=dict(**self._log_extra, **extra))
+
+  @cached_property
   def _log_extra(self) -> dict[str, object]:
-    data: Any = self.request.headers.get('X-Log-Extra', {})
-    assert(isinstance(data, dict))
-    return data
+    return dict(trace_id=self.request.headers.get('X-Trace-Id', str(uuid4())))
 
   def _count_and_log(self, kind: State) -> None:
-    extra: dict[str, object] = dict()
+    extra: dict[str, object] = dict(tasks_in_process=self.count)
     if kind == State.start:
       PdfHanlder.count += 1
     else:
       extra['elapsed'] = self._total_time
       PdfHanlder.count -= 1
-    extra['tasks_in_process'] = self.count
 
-    app_logger.info(f'{kind.value} converting html to pdf', extra=dict(**self._log_extra, **extra))
+    self._log(f'{kind.value} converting html to pdf', extra)
 
   async def _handle(self) -> web.StreamResponse:
     json = await self.request.json()
@@ -77,16 +80,49 @@ class PdfHanlder(web.View):
         response.content_type = 'application/pdf'
         await response.prepare(self.request)
 
-        await pdfkit.from_file(
-          sourcefile.name,
-          targetfile.name,
-          options=json.get('options', {})
-        )
+        pages_count = await self._wkhtmltopdf_exec(sourcefile.name, targetfile.name, options=dict(**json.get('options', {})))
+        self._log(f'{pages_count} pages has been written', method='debug')
 
-        while line := targetfile.read(1024):
+        size = 0
+
+        while line := targetfile.read(8192):
+          size += len(line)
           await response.write(line)
 
+        self._log(f'{pages_count} bytes has been sent', method='debug')
+
         return response
+
+  async def _wkhtmltopdf_exec(self, source: str, target: str, options: dict) -> int:
+    args = ['wkhtmltopdf']
+    if options:
+      for option, value in options.items():
+        args.append('--%s' % option)
+        if value:
+          args.append('"%s"' % value)
+
+    args += [source, target]
+    result = await self._cmd_exec(args)
+    match = re.search(r'Loading pages \(\d+/(\d+)\)', result)
+    assert(match)
+    return int(match.group(1))
+
+  async def _cmd_exec(self, cmd: list[str]) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=os.environ
+    )
+    stdout, stderr = await proc.communicate()
+
+    # wkhtmltopdf writes to stderr
+    output = (stderr or stdout).decode()
+
+    if (proc.returncode):
+      raise Exception(output)
+
+    return output
 
 
 app = web.Application()
@@ -94,4 +130,8 @@ app.add_routes(routes)
 
 
 if __name__ == '__main__':
-  web.run_app(app, keepalive_timeout=300, port=80)
+  web.run_app(
+    app,
+    port=80,
+    keepalive_timeout=int(os.getenv('KEEPALIVE_TIMEOUT', 300)),
+  )

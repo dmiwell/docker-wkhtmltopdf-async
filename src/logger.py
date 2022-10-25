@@ -36,11 +36,6 @@ formatter = CustomJsonFormatter()
 log_handler.setFormatter(formatter)
 
 
-def make_logger(name: str | None = None) -> logging.Logger:
-  logger = logging.getLogger(name)
-  logger.setLevel(getattr(logging, LOG_LEVEL))
-  logger.addHandler(log_handler)
-  return logger
-
-
-app_logger = make_logger()
+app_logger = logging.getLogger()
+app_logger.setLevel(getattr(logging, LOG_LEVEL))
+app_logger.addHandler(log_handler)
