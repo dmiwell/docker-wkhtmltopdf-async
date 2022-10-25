@@ -97,9 +97,9 @@ class PdfHanlder(web.View):
     args = ['wkhtmltopdf']
     if options:
       for option, value in options.items():
-        args.append('--%s' % option)
+        args.append(f'--{option}')
         if value:
-          args.append('"%s"' % value)
+          args.append(f'{value}')
 
     args += [source, target]
     result = await self._cmd_exec(args)
