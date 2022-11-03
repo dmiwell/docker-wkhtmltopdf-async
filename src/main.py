@@ -2,7 +2,7 @@ import asyncio
 from functools import cached_property
 import os
 import sys
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 import re
 import os
@@ -117,10 +117,10 @@ class PdfHanlder(web.View):
 
   async def _cmd_exec(self, cmd: list[str]) -> str:
     proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=os.environ
+      *cmd,
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.PIPE,
+      env=os.environ
     )
     stdout, stderr = await proc.communicate()
 
@@ -138,8 +138,15 @@ app.add_routes(routes)
 
 
 if __name__ == '__main__':
+  def run_app_print(arg: Any):
+    if isinstance(arg, str):
+     arg = arg.replace('(Press CTRL+C to quit)', '').strip()
+
+    app_logger.info(arg)
+
   web.run_app(
     app,
     port=80,
     keepalive_timeout=int(os.getenv('KEEPALIVE_TIMEOUT', 300)),
+    print=run_app_print
   )

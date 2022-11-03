@@ -5,8 +5,8 @@ WORKDIR /app
 
 RUN apk add gcc libc-dev libffi-dev
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY requirements.pip .
+RUN pip install -r requirements.pip
 
 COPY src src
 

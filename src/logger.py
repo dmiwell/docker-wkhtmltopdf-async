@@ -1,9 +1,10 @@
+from dataclasses import asdict
 import logging
 from typing import Any
 from pythonjsonlogger import jsonlogger
 from datetime import datetime
 import os
-from utils import md5_hash
+from utils import md5_hash, memory_info_mb
 
 
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
@@ -30,6 +31,7 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
     if (value := getattr(record, key, None)) and value != 'root':
       log_record[key] = value
 
+  log_record['mem'] = asdict(memory_info_mb())
 
 log_handler = logging.StreamHandler()
 formatter = CustomJsonFormatter()
