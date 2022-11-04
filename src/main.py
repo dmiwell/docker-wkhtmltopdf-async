@@ -1,29 +1,27 @@
-import asyncio
-from functools import cached_property
+import base64
+import enum
 import os
 import sys
+import tempfile
+import time
+from functools import cached_property
 from typing import Any, Literal
 from uuid import uuid4
-import re
-import os
-import tempfile
-from aiohttp import web
-import base64
-import time
-import enum
 
+from aiohttp import web
 
 SOURCES_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path = [SOURCES_ROOT] + sys.path
 
+from cmd_executor import CmdExecutor
 from logger import app_logger
-from utils import now_str
+from utils import now_str, to_mb
 
 
 class State(enum.Enum):
-  start = 'Starting'
-  fail = 'Failed'
-  end = 'Finished'
+  START = 'Starting'
+  FAILE = 'Failed'
+  END = 'Finished'
 
 
 routes = web.RouteTableDef()
@@ -38,13 +36,13 @@ class PdfHanlder(web.View):
     self.start_time = time.perf_counter()
 
   async def post(self) -> web.StreamResponse:
-    self._count_and_log(State.start)
+    self._count_and_log(State.START)
     try:
       result = await self._handle()
-      self._count_and_log(State.end)
+      self._count_and_log(State.END)
       return result
     except:
-      self._count_and_log(State.fail)
+      self._count_and_log(State.FAILE)
       raise
 
   @property
@@ -62,7 +60,7 @@ class PdfHanlder(web.View):
   def _count_and_log(self, kind: State) -> None:
     extra: dict[str, object] = dict()
 
-    if kind == State.start:
+    if kind == State.START:
       PdfHanlder.count += 1
     else:
       extra['elapsed'] = self._total_time
@@ -84,53 +82,31 @@ class PdfHanlder(web.View):
         response.content_type = 'application/pdf'
         await response.prepare(self.request)
 
-        pages_count = await self._wkhtmltopdf_exec(
+        start = time.perf_counter()
+        pages_num = await CmdExecutor.make_pdf(
           sourcefile.name,
           targetfile.name,
           options=json.get('options', {})
         )
-        self._log(f'{pages_count} pages has been written', method='debug')
+        elapsed_pdf = time.perf_counter() - start
 
         size = 0
 
+        start = time.perf_counter()
         while line := targetfile.read(8192):
           size += len(line)
           await response.write(line)
 
-        self._log(f'{pages_count} bytes has been sent', method='debug')
+        elapsed_download = time.perf_counter() - start
+        self._log(
+          f'{to_mb(size)} mb were sent. pdf with {pages_num} pages.',
+          dict(
+            elapsed_pdf=elapsed_pdf,
+            elapsed_download=elapsed_download,
+          )
+        )
 
         return response
-
-  async def _wkhtmltopdf_exec(self, source: str, target: str, options: dict) -> int:
-    args = ['wkhtmltopdf']
-    if options:
-      for option, value in options.items():
-        args.append(f'--{option}')
-        if value:
-          args.append(f'{value}')
-
-    args += [source, target]
-    result = await self._cmd_exec(args)
-    match = re.search(r'Loading pages \(\d+/(\d+)\)', result)
-    assert(match)
-    return int(match.group(1))
-
-  async def _cmd_exec(self, cmd: list[str]) -> str:
-    proc = await asyncio.create_subprocess_exec(
-      *cmd,
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-      env=os.environ
-    )
-    stdout, stderr = await proc.communicate()
-
-    # wkhtmltopdf writes to stderr
-    output = (stderr or stdout).decode()
-
-    if (proc.returncode):
-      raise Exception(output)
-
-    return output
 
 
 app = web.Application()
@@ -148,5 +124,6 @@ if __name__ == '__main__':
     app,
     port=80,
     keepalive_timeout=int(os.getenv('KEEPALIVE_TIMEOUT', 300)),
-    print=run_app_print
+    shutdown_timeout=60,
+    print=run_app_print,
   )

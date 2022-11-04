@@ -1,22 +1,15 @@
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from hashlib import md5
+import sys
 from typing import Final
 from datetime import datetime
 import resource
 import psutil
-import os
 
 
-DATETIME_FORMAT: Final[str] = '%Y%m%d_%H%M%S'
-
-
-@dataclass()
-class MemoryInfo():
-  sys_used: float
-  sys_percent: float
-  proc_used: float
-  subproc_used: float
+DATETIME_FORMAT = '%Y%m%d_%H%M%S'
+IS_DARWIN_OS = sys.platform == 'darwin'
 
 
 def md5_hash(data: bytes | str) -> str:
@@ -28,24 +21,36 @@ def now_str() -> str:
   return datetime.utcnow().strftime(DATETIME_FORMAT)
 
 
-def memory_info() -> MemoryInfo:
-  sys_memory = psutil.virtual_memory()
-  proc_memory = resource.getrusage(resource.RUSAGE_SELF)
-  child_memory = resource.getrusage(resource.RUSAGE_CHILDREN)
-  return MemoryInfo(
-    sys_used=sys_memory.used,
-    sys_percent=sys_memory.percent,
-    proc_used=proc_memory.ru_maxrss,
-    subproc_used=child_memory.ru_maxrss,
-  )
+@dataclass()
+class MemoryInfo():
+  sys_used: float
+  sys_percent: float
+  proc_own: float
+  proc_child: float
+  proc_total: float
+
+
+def rusage_to_mb(rusage: float | int) -> float:
+  factor = 1024 ** 2 if IS_DARWIN_OS else 1024
+  return round((rusage / factor), 2)
+
+
+def to_mb(number: int) -> float:
+  return round((number / 1024 ** 2), 2)
 
 
 def memory_info_mb() -> MemoryInfo:
-  os.getpid()
-  memory = memory_info()
-  memory_dict = asdict(memory)
-  memory_dict.pop('sys_percent')
+  sys_memory = psutil.virtual_memory()
+  proc_memory_rusage = resource.getrusage(resource.RUSAGE_SELF)
+  child_memory_rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
+
+  proc_own = rusage_to_mb(proc_memory_rusage.ru_maxrss)
+  proc_child = rusage_to_mb(child_memory_rusage.ru_maxrss)
+
   return MemoryInfo(
-    **{ k: round(v / 1024 ** 2, 2) for k, v in memory_dict.items() },
-    sys_percent=memory.sys_percent,
+    sys_used=to_mb(sys_memory.used),
+    sys_percent=sys_memory.percent,
+    proc_own=proc_own,
+    proc_child=proc_child,
+    proc_total=proc_own+proc_child,
   )
