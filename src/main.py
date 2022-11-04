@@ -1,10 +1,10 @@
 import base64
 import enum
+import math
 import os
 import sys
 import tempfile
 import time
-from functools import cached_property
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -17,10 +17,14 @@ from cmd_executor import CmdExecutor
 from logger import app_logger
 from utils import now_str, to_mb
 
+KEEPALIVE_SEC = int(os.getenv('KEEPALIVE_TIMEOUT', 300))
+KEEPALIVE_MIN = math.floor(KEEPALIVE_SEC / 60) + 1
+TMP_DIR = os.path.join(tempfile.gettempdir(), 'wkhtmltopdf')
+
 
 class State(enum.Enum):
   START = 'Starting'
-  FAILE = 'Failed'
+  FAIL = 'Failed'
   END = 'Finished'
 
 
@@ -29,73 +33,76 @@ routes = web.RouteTableDef()
 
 @routes.view('/')
 class PdfHanlder(web.View):
-  count = 0
-
   def __init__(self, request: web.Request) -> None:
     super().__init__(request)
-    self.start_time = time.perf_counter()
+    self._start_time = time.perf_counter()
+    self._trace_id = request.headers.get('X-Trace-Id', str(uuid4()))
 
   async def post(self) -> web.StreamResponse:
-    self._count_and_log(State.START)
+    await self._log_state(State.START)
     try:
+      await self._cleanup_tmp_files()
       result = await self._handle()
-      self._count_and_log(State.END)
+      await self._log_state(State.END)
       return result
     except:
-      self._count_and_log(State.FAILE)
+      await self._log_state(State.FAIL)
       raise
 
   @property
   def _total_time(self) -> float:
-    return time.perf_counter() - self.start_time
+    return time.perf_counter() - self._start_time
 
-  def _log(self, message: str, extra: dict[str, object] = dict(),
+  def _log(self, message: str, extra: dict[str, object] | None = None,
            method: Literal['info', 'warn', 'error', 'debug'] = 'info') -> None:
-    getattr(app_logger, method)(message, extra=dict(**self._log_extra, **extra))
+    getattr(app_logger, method)(message, extra=dict(**self._log_extra, **(extra or {})))
 
-  @cached_property
+  @property
   def _log_extra(self) -> dict[str, object]:
-    return dict(trace_id=self.request.headers.get('X-Trace-Id', str(uuid4())))
+    return dict(
+      trace_id=self._trace_id,
+      elapsed=self._total_time,
+    )
 
-  def _count_and_log(self, kind: State) -> None:
-    extra: dict[str, object] = dict()
+  async def _log_state(self, kind: State) -> None:
+    self._log(f'{kind.value} converting html to pdf')
 
-    if kind == State.START:
-      PdfHanlder.count += 1
-    else:
-      extra['elapsed'] = self._total_time
-      PdfHanlder.count -= 1
-
-    extra['tasks_in_process'] = PdfHanlder.count
-
-    self._log(f'{kind.value} converting html to pdf', extra)
+  async def _cleanup_tmp_files(self):
+    deleted = await CmdExecutor.remove_junk_tmp_files(TMP_DIR, KEEPALIVE_MIN)
+    if (deleted):
+      self._log(f'Deleted {deleted} garbage files')
 
   async def _handle(self) -> web.StreamResponse:
     json = await self.request.json()
-    prefix = f'wkhtmltopdf.{now_str()}.'
-    with tempfile.NamedTemporaryFile(prefix=prefix, suffix='.html') as sourcefile:
+    prefix = f'{now_str()}.'
+    with tempfile.NamedTemporaryFile(prefix=prefix, suffix='.html', dir=TMP_DIR) as sourcefile:
       sourcefile.write(base64.b64decode(json['contents']))
       sourcefile.flush()
 
-      with tempfile.NamedTemporaryFile(prefix=prefix, suffix='.pdf') as targetfile:
-        response = web.StreamResponse()
-        response.content_type = 'application/pdf'
-        await response.prepare(self.request)
-
+      with tempfile.NamedTemporaryFile(prefix=prefix, suffix='.pdf', dir=TMP_DIR) as targetfile:
         start = time.perf_counter()
         pages_num = await CmdExecutor.make_pdf(
           sourcefile.name,
           targetfile.name,
           options=json.get('options', {})
         )
+
+        sourcefile.close()
+
         elapsed_pdf = time.perf_counter() - start
 
-        size = 0
+
+        response = web.StreamResponse()
+        response.content_type = 'application/pdf'
+        await response.prepare(self.request)
 
         start = time.perf_counter()
+        size = 0
         while line := targetfile.read(8192):
           size += len(line)
           await response.write(line)
+
+        targetfile.close()
 
         elapsed_download = time.perf_counter() - start
         self._log(
@@ -106,7 +113,7 @@ class PdfHanlder(web.View):
           )
         )
 
-        return response
+    return response
 
 
 app = web.Application()
@@ -120,10 +127,12 @@ if __name__ == '__main__':
 
     app_logger.info(arg)
 
+  os.makedirs(TMP_DIR, mode=0o770, exist_ok=True)
+
   web.run_app(
     app,
     port=80,
-    keepalive_timeout=int(os.getenv('KEEPALIVE_TIMEOUT', 300)),
+    keepalive_timeout=KEEPALIVE_SEC,
     shutdown_timeout=60,
     print=run_app_print,
   )

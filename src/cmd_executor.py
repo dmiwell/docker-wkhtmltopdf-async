@@ -1,10 +1,11 @@
 import asyncio
-from dataclasses import dataclass
 import os
 import re
-
+import tempfile
+from dataclasses import dataclass
 
 RE_CMD_RESULT = re.compile(r'Loading pages \(\d+/(\d+)\)')
+TMP_DIR = tempfile.gettempdir()
 
 
 @dataclass
@@ -24,19 +25,23 @@ class CmdExecutor:
           args.append(f'{value}')
 
     args += [source, target]
-    result = await cls._cmd_exec(args)
+    result = await cls.exec(args)
     return cls._parse_pdf_result(result)
 
   @classmethod
-  def _parse_pdf_result(cls, result: str) -> int:
-    match = RE_CMD_RESULT.search(result)
-    if not match:
-      raise Exception(f'Unable to parse result:/n{result}')
+  async def remove_junk_tmp_files(cls, dir: str, minutes_ago: int) -> int:
+    result = await CmdExecutor.exec([
+      'find', dir,
+      '-type', 'f',
+      '-mmin', f'+{minutes_ago}',
+      '-print',
+      '-delete'
+    ])
 
-    return int(match.group(1))
+    return len(result.split('\n')) if result else 0
 
   @classmethod
-  async def _cmd_exec(cls, cmd: list[str]) -> str:
+  async def exec(cls, cmd: list[str]) -> str:
     proc = await asyncio.create_subprocess_exec(
       *cmd,
       stdout=asyncio.subprocess.PIPE,
@@ -52,3 +57,11 @@ class CmdExecutor:
       raise Exception(output)
 
     return output
+
+  @classmethod
+  def _parse_pdf_result(cls, result: str) -> int:
+    match = RE_CMD_RESULT.search(result)
+    if not match:
+      raise Exception(f'Unable to parse result:/n{result}')
+
+    return int(match.group(1))

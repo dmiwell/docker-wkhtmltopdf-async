@@ -25,9 +25,7 @@ def now_str() -> str:
 class MemoryInfo():
   sys_used: float
   sys_percent: float
-  proc_own: float
-  proc_child: float
-  proc_total: float
+  proc: float
 
 
 def rusage_to_mb(rusage: float | int) -> float:
@@ -42,15 +40,10 @@ def to_mb(number: int) -> float:
 def memory_info_mb() -> MemoryInfo:
   sys_memory = psutil.virtual_memory()
   proc_memory_rusage = resource.getrusage(resource.RUSAGE_SELF)
-  child_memory_rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
 
-  proc_own = rusage_to_mb(proc_memory_rusage.ru_maxrss)
-  proc_child = rusage_to_mb(child_memory_rusage.ru_maxrss)
 
   return MemoryInfo(
     sys_used=to_mb(sys_memory.used),
     sys_percent=sys_memory.percent,
-    proc_own=proc_own,
-    proc_child=proc_child,
-    proc_total=proc_own+proc_child,
+    proc=rusage_to_mb(proc_memory_rusage.ru_maxrss),
   )
